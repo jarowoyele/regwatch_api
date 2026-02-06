@@ -60,7 +60,7 @@ async def generate_pre_assessment_questions(regulation_data: dict) -> list[dict]
     if len(circular_text) > 15000:
         circular_text = circular_text[:15000] + "\n\n[Text truncated]"
     
-    prompt = f"""You are a regulatory compliance expert specializing in financial services. Create 6 clear, simple compliance questions based on this regulatory circular.
+    prompt = f"""You are a regulatory compliance expert specializing in financial services. Create 6 clear, personalized compliance questions based on this regulatory circular.
 
 **CIRCULAR INFORMATION:**
 
@@ -77,8 +77,9 @@ Circular Text:
    - Do NOT add questions from general knowledge
    - Focus on what the circular actually requires
 
-2. **Make questions simple and clear**
-   - Use plain language
+2. **Make questions personalized and direct**
+   - Use "you" and "your organization" to make questions feel personal
+   - Frame questions as if speaking directly to the compliance officer
    - Each question should be answerable with Yes/No
    - Focus on specific, measurable requirements
 
@@ -91,26 +92,29 @@ Circular Text:
    - Governance requirements (appointments, committees, etc.)
 
 4. **Question format:**
-   - Direct and specific
+   - Direct and conversational
+   - Use second person ("Have you...", "Does your organization...", "Do you...")
    - No ambiguous language
    - Focus on "what" and "when"
 
-**EXAMPLES OF GOOD QUESTIONS:**
-- "Do you submit quarterly returns to CBN within 7 days after quarter-end?"
-- "Have you appointed a Chief Compliance Officer?"
+**EXAMPLES OF GOOD PERSONALIZED QUESTIONS:**
+- "Have you appointed a Chief Compliance Officer for your organization?"
+- "Does your organization submit quarterly returns to CBN within 7 days after quarter-end?"
 - "Is your Capital Adequacy Ratio maintained at or above 10%?"
 - "Do you maintain customer records for at least 5 years?"
+- "Has your Board of Directors approved the AML/CFT policy within the last 12 months?"
+- "Have all your customer-facing staff received compliance training in the last year?"
 
 **OUTPUT FORMAT:**
 Return ONLY a JSON array:
 [
   {{
     "question_id": "Q1",
-    "question_text": "Clear, specific question"
+    "question_text": "Clear, personalized question using 'you' or 'your organization'"
   }},
   {{
     "question_id": "Q2",
-    "question_text": "Another clear question"
+    "question_text": "Another personalized question"
   }}
 ]
 
