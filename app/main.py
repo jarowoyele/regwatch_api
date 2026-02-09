@@ -586,14 +586,21 @@ class CompanyIdRequest(BaseModel):
     company_id: str  # Only ecosystem company ID needed
 
 
-class CircularIdRequest(BaseModel):
-    circular_id: str  # The MongoDB _id from regulation_v3 collection
+class RegulationIdRequest(BaseModel):
+    regulation_id: str  # The MongoDB _id from regulation_v3 collection
 
 
 class TaskGenerationRequest(BaseModel):
     organization_id: str  # RegComply organization ID (from webhook)
     risk: str = "medium"  # Risk level: "high", "medium", or "low" (from webhook)
-    circular_id: str  # The MongoDB _id from regulation_v3 collection (from webhook)
+    regulation_id: str  # The MongoDB _id from regulation_v3 collection (from webhook)
+
+
+class PreassessmentWebhookPayload(BaseModel):
+    """Pre-assessment webhook payload structure"""
+    organization_id: str
+    preassessment_id: str
+    regulation_id: str
 
 
 class TaskInstruction(BaseModel):
@@ -626,7 +633,13 @@ async def root():
         "endpoints": {
             "health": "/health",
             "docs": "/docs",
-            "suggest_regulators": "/api/v1/regulators/suggest/{company_id}"
+            "suggest_regulators": "/api/v1/regulators/suggest/{company_id}",
+            "match_circulars": "/api/v1/circulars/match",
+            "generate_assessment": "/api/v1/assessment/generate",
+            "generate_tasks": "/api/v1/tasks/generate",
+            "preassessment_webhook": "POST /webhook/preassessment",
+            "view_webhooks": "GET /webhook/received",
+            "clear_webhooks": "DELETE /webhook/received"
         }
     }
 
@@ -667,12 +680,12 @@ async def test_regulations():
 
 
 @app.post("/api/v1/assessment/generate", response_model=PreAssessmentResponse)
-async def generate_assessment_questions(request: CircularIdRequest):
+async def generate_assessment_questions(request: RegulationIdRequest):
     """
     Generate pre-assessment questions for a specific regulation and save to database
     
     Args:
-        request: CircularIdRequest with circular_id (MongoDB _id)
+        request: RegulationIdRequest with regulation_id (MongoDB _id)
         
     Returns:
         Pre-assessment questions saved to database
@@ -681,9 +694,9 @@ async def generate_assessment_questions(request: CircularIdRequest):
     # Fetch regulation from database using _id
     regulations_collection = get_regulations()
     try:
-        regulation = await regulations_collection.find_one({"_id": ObjectId(request.circular_id)})
+        regulation = await regulations_collection.find_one({"_id": ObjectId(request.regulation_id)})
     except:
-        regulation = await regulations_collection.find_one({"_id": request.circular_id})
+        regulation = await regulations_collection.find_one({"_id": request.regulation_id})
     
     if not regulation:
         raise HTTPException(status_code=404, detail="Regulation not found")
@@ -875,30 +888,30 @@ async def generate_compliance_task_breakdown(request: TaskGenerationRequest):
     """
     Generate compliance tasks for a circular and send to RegComply
     
-    Webhook receives: organization_id, risk, circular_id
+    Webhook receives: organization_id, risk, regulation_id
     Fetches from DB: title, dueDate, standards
     AI generates: description, instructions
     
     Args:
-        request: TaskGenerationRequest with organization_id, risk, circular_id
+        request: TaskGenerationRequest with organization_id, risk, regulation_id
         
     Returns:
         Generated compliance tasks
     """
     
-    # Fetch regulation from database using circular_id
+    # Fetch regulation from database using regulation_id
     regulations_collection = get_regulations()
     try:
-        regulation = await regulations_collection.find_one({"_id": ObjectId(request.circular_id)})
+        regulation = await regulations_collection.find_one({"_id": ObjectId(request.regulation_id)})
     except:
-        regulation = await regulations_collection.find_one({"_id": request.circular_id})
+        regulation = await regulations_collection.find_one({"_id": request.regulation_id})
     
     if not regulation:
         raise HTTPException(status_code=404, detail="Regulation not found")
     
     # Extract data from regulation for task schema
     circular_title = regulation.get("title", "")
-    circular_id = str(regulation.get("_id"))
+    regulation_id = str(regulation.get("_id"))
     
     # Get compliance deadline from regulation
     compliance_deadline = regulation.get("dates", {}).get("compliance_deadline")
@@ -914,8 +927,15 @@ async def generate_compliance_task_breakdown(request: TaskGenerationRequest):
         default_deadline = datetime.utcnow() + timedelta(days=90)
         due_date = default_deadline.isoformat() + "Z"
     
-    # Get standards from regulation obligations
-    standards = regulation.get("obligations", {}).get("standards", [])
+    # Get standards from regulation obligations (extract from mapped_standards)
+    standards = []
+    obligations = regulation.get("obligations", [])
+    for obligation in obligations:
+        mapped_standards = obligation.get("mapped_standards", [])
+        for standard in mapped_standards:
+            standard_name = standard.get("standard_name", "")
+            if standard_name and standard_name not in standards:
+                standards.append(standard_name)
     
     # Build minimal profile for AI (no company data needed)
     company_profile = {
@@ -960,7 +980,7 @@ async def generate_compliance_task_breakdown(request: TaskGenerationRequest):
             "risk": request.risk,  # From webhook
             "dueDate": due_date,  # From regulation_v3
             "standards": standards,  # From regulation_v3
-            "regulationId": circular_id,  # From regulation_v3
+            "regulationId": regulation_id,  # From regulation_v3
             "instructions": instructions  # From AI
         })
     
@@ -981,3 +1001,88 @@ async def generate_compliance_task_breakdown(request: TaskGenerationRequest):
         tasks=formatted_tasks
     )
 
+
+
+# ============================================================================
+# PRE-ASSESSMENT WEBHOOK ENDPOINTS
+# ============================================================================
+
+# Store received webhooks in memory (for testing/debugging)
+received_preassessment_webhooks = []
+
+
+@app.post("/webhook/preassessment")
+async def receive_preassessment_webhook(payload: PreassessmentWebhookPayload):
+    """
+    Receive webhook for pre-assessment
+    
+    Expected payload:
+    {
+        "organization_id": "682ae94fa2e778c597d09b57",
+        "preassessment_id": "507f1f77bcf86cd799439011",
+        "regulation_id": "6981ea4cb358c36d4be852be"
+    }
+    
+    Returns:
+        Confirmation of webhook receipt
+    """
+    try:
+        print("=" * 80)
+        print("PRE-ASSESSMENT WEBHOOK RECEIVED")
+        print("=" * 80)
+        print(f"Timestamp: {datetime.utcnow().isoformat()}")
+        print(f"Organization ID: {payload.organization_id}")
+        print(f"Pre-assessment ID: {payload.preassessment_id}")
+        print(f"Regulation ID: {payload.regulation_id}")
+        
+        # Store webhook
+        webhook_data = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "organization_id": payload.organization_id,
+            "preassessment_id": payload.preassessment_id,
+            "regulation_id": payload.regulation_id
+        }
+        received_preassessment_webhooks.append(webhook_data)
+        
+        print("=" * 80)
+        print("WEBHOOK RECEIVED SUCCESSFULLY")
+        print("=" * 80)
+        
+        return {
+            "status": "success",
+            "message": "Webhook received successfully",
+            "received_at": datetime.utcnow().isoformat(),
+            "payload": {
+                "organization_id": payload.organization_id,
+                "preassessment_id": payload.preassessment_id,
+                "regulation_id": payload.regulation_id
+            }
+        }
+        
+    except Exception as e:
+        print(f"❌ Error processing webhook: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process webhook: {str(e)}"
+        )
+
+
+@app.get("/webhook/received")
+async def get_received_webhooks():
+    """View all received pre-assessment webhooks"""
+    return {
+        "total_received": len(received_preassessment_webhooks),
+        "webhooks": received_preassessment_webhooks
+    }
+
+
+@app.delete("/webhook/received")
+async def clear_received_webhooks():
+    """Clear all received pre-assessment webhooks"""
+    global received_preassessment_webhooks
+    count = len(received_preassessment_webhooks)
+    received_preassessment_webhooks = []
+    return {
+        "status": "success",
+        "message": f"Cleared {count} webhooks"
+    }
